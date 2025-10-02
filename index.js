@@ -1,49 +1,53 @@
 const express = require("express");
 const admin = require("firebase-admin");
 
-// 🔹 Pakai serviceAccountKey.json (download dari Firebase Console > Project Settings > Service Accounts)
-const serviceAccount = require("./serviceAccountKey.json");
+const app = express();
 
+// ✅ Inisialisasi Firebase Admin pakai ENV
 if (!admin.apps.length) {
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+    })
   });
 }
 
 const db = admin.firestore();
-const app = express();
 
-// 🔹 API endpoint untuk trigger cronjob
-app.get("/run-daily", async (req, res) => {
+// ✅ Route utama (cek server jalan)
+app.get("/", (req, res) => {
+  res.send("🔥 Cronjob service jalan!");
+});
+
+// ✅ Cronjob route (misalnya jalankan tiap hari)
+app.get("/cron/daily-income", async (req, res) => {
   try {
-    const snapshot = await db.collection("purchases")
+    const purchasesSnap = await db.collection("purchases")
       .where("status", "==", "approved")
       .get();
 
-    let updatedCount = 0;
+    let updated = 0;
 
-    for (const doc of snapshot.docs) {
+    for (const doc of purchasesSnap.docs) {
       const p = doc.data();
       const userRef = db.collection("users").doc(p.userId);
 
-      // Hitung income harian
-      await userRef.update({
-        saldo: admin.firestore.FieldValue.increment(p.dailyIncome || 0)
-      });
+      if (p.dailyIncome && p.duration) {
+        await userRef.update({
+          saldo: admin.firestore.FieldValue.increment(p.dailyIncome),
+        });
 
-      updatedCount++;
+        updated++;
+      }
     }
 
-    res.json({ success: true, updated: updatedCount });
+    res.json({ success: true, message: `✅ Update saldo harian ${updated} user` });
   } catch (err) {
-    console.error("🔥 Error dailyIncome:", err);
-    res.status(500).json({ error: err.message });
+    console.error("❌ Error cron:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-app.get("/", (req, res) => {
-  res.send("✅ Daily Income Cron is running!");
-});
-
-// Gunakan port Vercel
-app.listen(3000, () => console.log("Server running on port 3000"));
+module.exports = app;
