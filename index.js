@@ -40,28 +40,47 @@ app.get("/cron/daily-income", async (req, res) => {
         const start = p.createdAt.toDate();
 
         // Hitung total hari sudah lewat sejak pembelian
-        const elapsedDays = Math.floor(
-          (now - start) / (1000 * 60 * 60 * 24)
-        );
+        const elapsedDays = Math.floor((now - start) / (1000 * 60 * 60 * 24));
 
         // Sudah dibayar berapa hari
         const paidDays = p.paidDays || 0;
 
-        // Hari baru yang harus dibayar
+        // Hari baru yang harus dibayar (catch-up juga kalau cron telat)
         const newDays = Math.min(elapsedDays, p.duration) - paidDays;
 
         if (newDays > 0) {
           const income = p.dailyIncome * newDays;
 
-          // Tambahkan saldo & aset ke user
+          // 🔹 Update saldo user
           await userRef.update({
             saldo: admin.firestore.FieldValue.increment(income),
             aset: admin.firestore.FieldValue.increment(income),
           });
 
-          // Update paidDays biar ga dobel
+          // 🔹 Update purchase progress
           await doc.ref.update({
             paidDays: paidDays + newDays,
+            ...(paidDays + newDays >= p.duration
+              ? { status: "finished", finishedAt: now }
+              : {}),
+          });
+
+          // 🔹 Simpan ke riwayat
+          await db.collection("history").add({
+            userId: p.userId,
+            animal: p.animal,
+            amount: income,
+            type: "income",
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+
+          // 🔹 Simpan notifikasi
+          await db.collection("notifications").add({
+            userId: p.userId,
+            title: "✅ Claim Harian",
+            message: `+ Rp ${income.toLocaleString()} dari ${p.animal} (${newDays} hari)`,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            type: "income",
           });
 
           updated++;
